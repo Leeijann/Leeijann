@@ -3,48 +3,107 @@ cosmos_engine.py
 ────────────────
 Planetary aspect scoring, moon phase detection, Fibonacci levels,
 Gann Square of 9 harmonics, and eclipse proximity checks.
-Uses the `ephem` library — runs 100% offline on your local PC.
+
+Upgraded to Swiss Ephemeris (pyswisseph) — professional-grade precision.
+Uses Moshier built-in ephemeris: NO external data files or API keys needed.
+Adds: Pluto, Lunar Nodes, Chiron, retrograde speed detection.
 """
 
 import math
 import datetime
-import ephem
+import swisseph as swe
 from config import FIBONACCI_LEVELS, PLANET_ASPECTS, GANN_ANGLES
+
+# Use Moshier built-in ephemeris — no files needed, runs fully offline
+swe.set_ephe_path(None)
+
+_FLAG = swe.FLG_MOSEPH | swe.FLG_SPEED
 
 
 # ─── PLANETS ────────────────────────────────────────────────────────────────
 
 PLANETS = {
-    "Sun":     ephem.Sun,
-    "Moon":    ephem.Moon,
-    "Mercury": ephem.Mercury,
-    "Venus":   ephem.Venus,
-    "Mars":    ephem.Mars,
-    "Jupiter": ephem.Jupiter,
-    "Saturn":  ephem.Saturn,
-    "Uranus":  ephem.Uranus,
-    "Neptune": ephem.Neptune,
+    "Sun":      swe.SUN,
+    "Moon":     swe.MOON,
+    "Mercury":  swe.MERCURY,
+    "Venus":    swe.VENUS,
+    "Mars":     swe.MARS,
+    "Jupiter":  swe.JUPITER,
+    "Saturn":   swe.SATURN,
+    "Uranus":   swe.URANUS,
+    "Neptune":  swe.NEPTUNE,
+    "Pluto":    swe.PLUTO,
+    "TrueNode": swe.TRUE_NODE,
+    "Chiron":   swe.CHIRON,
 }
 
 
-def get_planet_positions(date=None):
-    """Return ecliptic longitude (degrees) for each planet."""
-    d = ephem.Date(date) if date else ephem.now()
+def _jd(dt=None) -> float:
+    """Convert a datetime (or now) to a Julian Day number."""
+    if dt is None:
+        dt = datetime.datetime.utcnow()
+    if isinstance(dt, (int, float)):
+        return float(dt)
+    return swe.julday(
+        dt.year, dt.month, dt.day,
+        dt.hour + dt.minute / 60.0 + dt.second / 3600.0
+    )
+
+
+# ─── PLANET POSITIONS ────────────────────────────────────────────────────────
+
+def get_planet_positions(date=None) -> dict:
+    """Return ecliptic longitude (degrees 0–360) for each tracked body."""
+    jd = _jd(date)
     positions = {}
-    for name, planet_class in PLANETS.items():
-        body = planet_class()
-        body.compute(d, epoch=d)
-        ecl = ephem.Ecliptic(body, epoch=d)
-        positions[name] = math.degrees(ecl.lon) % 360
+    for name, planet_id in PLANETS.items():
+        try:
+            result, _ = swe.calc_ut(jd, planet_id, _FLAG)
+            positions[name] = round(result[0] % 360, 4)
+        except Exception:
+            pass
     return positions
+
+
+def get_planet_speeds(date=None) -> dict:
+    """Return daily speed in longitude for each body (negative = retrograde)."""
+    jd = _jd(date)
+    speeds = {}
+    for name, planet_id in PLANETS.items():
+        try:
+            result, _ = swe.calc_ut(jd, planet_id, _FLAG)
+            speeds[name] = round(result[3], 6)  # index 3 = speed in longitude
+        except Exception:
+            pass
+    return speeds
+
+
+# ─── RETROGRADE DETECTION ────────────────────────────────────────────────────
+
+def get_retrograde_planets(date=None) -> list:
+    """Return list of planet names currently retrograde (speed < 0)."""
+    speeds = get_planet_speeds(date)
+    # Sun and Moon never retrograde
+    skip = {"Sun", "Moon", "TrueNode"}
+    return [name for name, speed in speeds.items()
+            if speed < 0 and name not in skip]
+
+
+def is_mercury_retrograde(date=None) -> bool:
+    jd = _jd(date)
+    try:
+        result, _ = swe.calc_ut(jd, swe.MERCURY, _FLAG)
+        return result[3] < 0
+    except Exception:
+        return False
 
 
 # ─── ASPECT SCORING ──────────────────────────────────────────────────────────
 
 def calculate_aspect_score(date=None):
     """
-    Score all planet-to-planet aspects.
-    Returns (total_score, list of active aspects).
+    Score all planet-to-planet aspects using Swiss Ephemeris positions.
+    Returns (total_score, list of active aspect dicts).
     """
     positions = get_planet_positions(date)
     names = list(positions.keys())
@@ -68,103 +127,80 @@ def calculate_aspect_score(date=None):
                         "score":   score,
                     })
 
+    # Sort by absolute score strength, strongest first
+    active_aspects.sort(key=lambda x: abs(x["score"]), reverse=True)
     return total_score, active_aspects
 
 
 # ─── MOON PHASE ──────────────────────────────────────────────────────────────
 
-def get_moon_phase(date=None):
+def get_moon_phase(date=None) -> dict:
     """
-    Returns moon phase name and day in cycle (0-29).
-    Phase names: New Moon, Waxing Crescent, First Quarter,
-                 Waxing Gibbous, Full Moon, Waning Gibbous,
-                 Last Quarter, Waning Crescent
+    Calculate moon phase from Sun-Moon elongation angle.
+    Swiss Ephemeris gives precise elongation directly.
     """
-    d = ephem.Date(date) if date else ephem.now()
-    prev_new = ephem.previous_new_moon(d)
-    days_since_new = d - prev_new
+    jd = _jd(date)
+    try:
+        sun,  _ = swe.calc_ut(jd, swe.SUN,  _FLAG)
+        moon, _ = swe.calc_ut(jd, swe.MOON, _FLAG)
+        elongation = (moon[0] - sun[0]) % 360
+    except Exception:
+        elongation = 0.0
 
-    phase_day = int(days_since_new)
-
-    if phase_day <= 1:
-        phase_name = "New Moon"
-        bias = "ACCUMULATION — favor longs"
-    elif phase_day <= 6:
-        phase_name = "Waxing Crescent"
-        bias = "BUILDING — early long entries"
-    elif phase_day <= 8:
-        phase_name = "First Quarter"
-        bias = "MOMENTUM — trend following"
-    elif phase_day <= 13:
-        phase_name = "Waxing Gibbous"
-        bias = "EXPANSION — ride the trend"
-    elif phase_day <= 15:
-        phase_name = "Full Moon"
-        bias = "CAUTION — reversal risk high, tighten stops"
-    elif phase_day <= 21:
-        phase_name = "Waning Gibbous"
-        bias = "DISTRIBUTION — consider partial exits"
-    elif phase_day <= 23:
-        phase_name = "Last Quarter"
-        bias = "CONTRACTION — favor shorts or cash"
+    if elongation < 45:
+        phase_name, bias = "New Moon",       "ACCUMULATION — favor longs"
+    elif elongation < 90:
+        phase_name, bias = "Waxing Crescent","BUILDING — early long entries"
+    elif elongation < 135:
+        phase_name, bias = "First Quarter",  "MOMENTUM — trend following"
+    elif elongation < 180:
+        phase_name, bias = "Waxing Gibbous", "EXPANSION — ride the trend"
+    elif elongation < 225:
+        phase_name, bias = "Full Moon",      "CAUTION — reversal risk high, tighten stops"
+    elif elongation < 270:
+        phase_name, bias = "Waning Gibbous", "DISTRIBUTION — consider partial exits"
+    elif elongation < 315:
+        phase_name, bias = "Last Quarter",   "CONTRACTION — favor shorts or cash"
     else:
-        phase_name = "Waning Crescent"
-        bias = "RESET — wait for next New Moon"
+        phase_name, bias = "Waning Crescent","RESET — wait for next New Moon"
 
     return {
-        "phase": phase_name,
-        "day_in_cycle": phase_day,
-        "bias": bias,
+        "phase":      phase_name,
+        "elongation": round(elongation, 2),
+        "bias":       bias,
     }
-
-
-# ─── MERCURY RETROGRADE ───────────────────────────────────────────────────────
-
-def is_mercury_retrograde(date=None):
-    """Check if Mercury is currently retrograde."""
-    d = ephem.Date(date) if date else ephem.now()
-    mercury = ephem.Mercury()
-
-    mercury.compute(ephem.Date(d - 1))
-    prev_lon = math.degrees(ephem.Ecliptic(mercury, epoch=d).lon)
-
-    mercury.compute(d)
-    curr_lon = math.degrees(ephem.Ecliptic(mercury, epoch=d).lon)
-
-    diff = (curr_lon - prev_lon + 360) % 360
-    return diff > 180  # retrograde if moving backward
 
 
 # ─── ECLIPSE PROXIMITY ───────────────────────────────────────────────────────
 
-def eclipse_proximity_days(date=None):
+def eclipse_proximity_days(date=None) -> float:
     """
-    Returns days until or since nearest solar/lunar eclipse window.
-    Eclipse = new moon or full moon within 18.5° of a node.
-    Approximated by checking proximity of new/full moon dates.
+    Find the nearest solar or lunar eclipse (past or future).
+    Returns number of days to/from closest eclipse.
     """
-    d = ephem.Date(date) if date else ephem.now()
+    jd = _jd(date)
+    candidates = []
 
-    next_new  = ephem.next_new_moon(d)
-    next_full = ephem.next_full_moon(d)
-    prev_new  = ephem.previous_new_moon(d)
-    prev_full = ephem.previous_full_moon(d)
+    try:
+        _, sol_tret = swe.sol_eclipse_when_glob(jd, swe.FLG_MOSEPH)
+        if sol_tret and sol_tret[0]:
+            candidates.append(abs(jd - sol_tret[0]))
+    except Exception:
+        pass
 
-    candidates = [
-        abs(d - next_new),
-        abs(d - next_full),
-        abs(d - prev_new),
-        abs(d - prev_full),
-    ]
-    return min(candidates)  # days as float
+    try:
+        _, lun_tret = swe.lun_eclipse_when(jd, swe.FLG_MOSEPH)
+        if lun_tret and lun_tret[0]:
+            candidates.append(abs(jd - lun_tret[0]))
+    except Exception:
+        pass
+
+    return min(candidates) if candidates else 99.0
 
 
 # ─── FIBONACCI LEVELS ────────────────────────────────────────────────────────
 
-def calculate_fibonacci_levels(swing_low: float, swing_high: float):
-    """
-    Returns retracement and extension levels from a swing.
-    """
+def calculate_fibonacci_levels(swing_low: float, swing_high: float) -> dict:
     diff = swing_high - swing_low
     levels = {}
     for ratio in FIBONACCI_LEVELS:
@@ -176,10 +212,6 @@ def calculate_fibonacci_levels(swing_low: float, swing_high: float):
 
 
 def nearest_fibonacci_level(price: float, swing_low: float, swing_high: float):
-    """
-    Find the closest Fibonacci level to the current price.
-    Returns (label, level_price, distance_pct).
-    """
     levels = calculate_fibonacci_levels(swing_low, swing_high)
     closest = min(levels.items(), key=lambda x: abs(x[1] - price))
     distance_pct = abs(closest[1] - price) / price * 100
@@ -188,12 +220,8 @@ def nearest_fibonacci_level(price: float, swing_low: float, swing_high: float):
 
 # ─── GANN SQUARE OF 9 ────────────────────────────────────────────────────────
 
-def gann_square_of_9(price: float):
-    """
-    Calculate key Gann Square of 9 harmonic price levels.
-    Uses the formula: level = (sqrt(price) ± n/4)^2
-    where n = 1..4 (90°, 180°, 270°, 360°)
-    """
+def gann_square_of_9(price: float) -> dict:
+    """Calculate Gann Square of 9 harmonic price levels (90°/180°/270°/360°)."""
     sqrt_p = math.sqrt(price)
     levels = {}
     increments = {90: 1/4, 180: 2/4, 270: 3/4, 360: 4/4}
@@ -228,26 +256,43 @@ def get_zodiac(longitude: float):
     return "Pisces", "Oil, pharma, collective sentiment"
 
 
-def get_sun_sign(date=None):
+def get_sun_sign(date=None) -> dict:
     positions = get_planet_positions(date)
-    sign, sector = get_zodiac(positions["Sun"])
-    return {"sign": sign, "sector": sector, "longitude": round(positions["Sun"], 2)}
+    lon = positions.get("Sun", 0.0)
+    sign, sector = get_zodiac(lon)
+    return {"sign": sign, "sector": sector, "longitude": round(lon, 2)}
+
+
+# ─── CHIRON & LUNAR NODE CONTEXT ─────────────────────────────────────────────
+
+def get_chiron_node_context(date=None) -> dict:
+    """Return Chiron and True Node sign — useful for deeper cycle context."""
+    positions = get_planet_positions(date)
+    chiron_lon   = positions.get("Chiron", 0.0)
+    node_lon     = positions.get("TrueNode", 0.0)
+    chiron_sign, _ = get_zodiac(chiron_lon)
+    node_sign, _   = get_zodiac(node_lon)
+    return {
+        "chiron_sign":    chiron_sign,
+        "chiron_lon":     chiron_lon,
+        "true_node_sign": node_sign,
+        "true_node_lon":  node_lon,
+    }
 
 
 # ─── FULL COSMIC REPORT ──────────────────────────────────────────────────────
 
-def full_cosmic_report(date=None):
-    """
-    Master function — returns a complete cosmic snapshot.
-    """
+def full_cosmic_report(date=None) -> dict:
+    """Master function — returns a complete Swiss Ephemeris cosmic snapshot."""
     aspect_score, aspects = calculate_aspect_score(date)
-    moon = get_moon_phase(date)
-    retro = is_mercury_retrograde(date)
-    eclipse_days = eclipse_proximity_days(date)
-    sun_sign = get_sun_sign(date)
-    positions = get_planet_positions(date)
+    moon          = get_moon_phase(date)
+    retro_planets = get_retrograde_planets(date)
+    retro         = "Mercury" in retro_planets
+    eclipse_days  = eclipse_proximity_days(date)
+    sun_sign      = get_sun_sign(date)
+    positions     = get_planet_positions(date)
+    cn_context    = get_chiron_node_context(date)
 
-    # Determine directional bias
     if aspect_score >= 15:
         cosmic_bias = "BULLISH"
     elif aspect_score <= -10:
@@ -255,19 +300,17 @@ def full_cosmic_report(date=None):
     else:
         cosmic_bias = "NEUTRAL"
 
-    # Eclipse caution flag
-    eclipse_caution = eclipse_days <= 7
-
-    report = {
-        "date": str(ephem.Date(date) if date else ephem.now()),
-        "aspect_score": aspect_score,
-        "cosmic_bias": cosmic_bias,
-        "active_aspects": aspects,
-        "moon": moon,
-        "mercury_retrograde": retro,
+    return {
+        "date":                  str(datetime.datetime.utcnow()),
+        "aspect_score":          aspect_score,
+        "cosmic_bias":           cosmic_bias,
+        "active_aspects":        aspects,
+        "moon":                  moon,
+        "mercury_retrograde":    retro,
+        "retrograde_planets":    retro_planets,
         "eclipse_proximity_days": round(eclipse_days, 1),
-        "eclipse_caution": eclipse_caution,
-        "sun_sign": sun_sign,
-        "planet_positions": {k: round(v, 2) for k, v in positions.items()},
+        "eclipse_caution":       eclipse_days <= 7,
+        "sun_sign":              sun_sign,
+        "chiron_node":           cn_context,
+        "planet_positions":      {k: round(v, 2) for k, v in positions.items()},
     }
-    return report
