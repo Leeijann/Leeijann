@@ -1,0 +1,14 @@
+# Telegram bot
+python-telegram-bot==21.3
+
+# Coinbase Advanced Trade API
+coinbase-advanced-py==1.4.0
+
+# Planetary/astronomical calculations (runs fully offline)
+ephem==4.1.5
+
+# Scheduling
+schedule==1.2.2
+
+# Environment variable loading
+python-dotenv==1.0.1
