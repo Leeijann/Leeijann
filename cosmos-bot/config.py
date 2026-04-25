@@ -11,6 +11,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 COINBASE_API_KEY = os.getenv("COINBASE_API_KEY")
 COINBASE_API_SECRET = os.getenv("COINBASE_API_SECRET")
 
+# Geographic location (for sunrise/sunset/moon rise — set to your city)
+# Defaults to New York. Change in .env to your actual coordinates.
+GEO_LAT = float(os.getenv("GEO_LAT", "40.7128"))   # positive = North
+GEO_LON = float(os.getenv("GEO_LON", "-74.0060"))  # negative = West
+
 # Bot behavior
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "USD")
 DEFAULT_CRYPTO = os.getenv("DEFAULT_CRYPTO", "BTC-USD")

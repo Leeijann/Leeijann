@@ -46,12 +46,13 @@ def generate_signal(product_id="BTC-USD", date=None):
     """
     cb = CoinbaseClient()
 
-    # 1. Cosmic report
+    # 1. Cosmic report (includes time brain)
     report = full_cosmic_report(date)
-    score = report["aspect_score"]
+    score = report["combined_score"]   # aspect score + temporal brain score
     moon = report["moon"]
     retro = report["mercury_retrograde"]
     eclipse_caution = report["eclipse_caution"]
+    brain = report["brain"]
 
     # 2. Price data
     price_data = cb.get_price(product_id)
@@ -119,27 +120,49 @@ def generate_signal(product_id="BTC-USD", date=None):
         direction = "NEUTRAL"
 
     return {
-        "product_id":        product_id,
-        "signal_class":      signal_class,
-        "direction":         direction,
-        "risk_pct":          risk_pct,
-        "current_price":     current_price,
-        "cosmic_score":      score,
-        "cosmic_bias":       report["cosmic_bias"],
-        "moon_phase":        moon_phase,
-        "moon_bias":         moon["bias"],
+        "product_id":         product_id,
+        "signal_class":       signal_class,
+        "direction":          direction,
+        "risk_pct":           risk_pct,
+        "current_price":      current_price,
+        "cosmic_score":       report["aspect_score"],
+        "temporal_score":     report["temporal_score"],
+        "combined_score":     score,
+        "cosmic_bias":        report["cosmic_bias"],
+        "moon_phase":         moon_phase,
+        "moon_bias":          moon["bias"],
+        "moon_illumination":  brain["moon"]["illumination_pct"],
+        "moon_symbol":        brain["moon"]["symbol"],
         "mercury_retrograde": retro,
-        "eclipse_caution":   eclipse_caution,
-        "eclipse_days":      report["eclipse_proximity_days"],
-        "criteria_met":      criteria_met,
-        "criteria_detail":   criteria_detail,
-        "active_aspects":    report["active_aspects"][:5],  # top 5 aspects
-        "sun_sign":          report["sun_sign"],
-        "swing_low":         swing_low,
-        "swing_high":        swing_high,
-        "nearest_fib":       {"label": fib_label, "level": fib_level, "dist_pct": fib_dist_pct},
-        "gann_levels":       gann_levels,
-        "fib_levels":        fib_levels,
+        "retrograde_planets": report["retrograde_planets"],
+        "eclipse_caution":    eclipse_caution,
+        "eclipse_days":       report["eclipse_proximity_days"],
+        "criteria_met":       criteria_met,
+        "criteria_detail":    criteria_detail,
+        "active_aspects":     report["active_aspects"][:5],
+        "sun_sign":           report["sun_sign"],
+        "swing_low":          swing_low,
+        "swing_high":         swing_high,
+        "nearest_fib":        {"label": fib_label, "level": fib_level, "dist_pct": fib_dist_pct},
+        "gann_levels":        gann_levels,
+        "fib_levels":         fib_levels,
+        # Time brain
+        "time_of_day":        brain["time_of_day"]["segment"],
+        "market_energy":      brain["time_of_day"]["market_energy"],
+        "season":             brain["season"]["season"],
+        "season_tendency":    brain["season"]["market_tendency"],
+        "solar_term":         brain["solar_term"]["solar_term"],
+        "solar_term_meaning": brain["solar_term"]["meaning"],
+        "day_ruler":          brain["day_ruler"]["ruler"],
+        "day_ruler_meaning":  brain["day_ruler"]["meaning"],
+        "planetary_hour":     brain["planetary_hour"]["ruling_planet"],
+        "planetary_hour_meaning": brain["planetary_hour"]["meaning"],
+        "market_session":     brain["market_session"]["active_sessions"],
+        "liquidity":          brain["market_session"]["liquidity"],
+        "moonrise_utc":       brain["moon"]["moonrise_utc"],
+        "moonset_utc":        brain["moon"]["moonset_utc"],
+        "sunrise_utc":        brain["time_of_day"]["sunrise_utc"],
+        "sunset_utc":         brain["time_of_day"]["sunset_utc"],
     }
 
 
@@ -157,20 +180,40 @@ def format_signal_message(sig: dict) -> str:
         "VOID":  "VOID",
     }
 
+    retro_list = ", ".join(sig.get("retrograde_planets", [])) or "None"
+
     lines = [
-        f"=== COSMOS SIGNAL REPORT ===",
+        f"=== HERMES-7 SIGNAL REPORT ===",
         f"Asset     : {sig['product_id']}",
         f"Class     : {emoji_map.get(cls, cls)}",
         f"Direction : {sig['direction']}",
         f"Risk      : {sig['risk_pct'] * 100:.2f}% of account",
         f"Price     : ${sig['current_price']:,.2f}",
         "",
-        f"--- COSMIC DATA ---",
-        f"Aspect Score : {sig['cosmic_score']} ({sig['cosmic_bias']})",
-        f"Moon Phase   : {sig['moon_phase']} — {sig['moon_bias']}",
-        f"Mercury Retro: {'YES — CAUTION' if sig['mercury_retrograde'] else 'No'}",
-        f"Eclipse Caution: {'YES ({:.1f} days)'.format(sig['eclipse_days']) if sig['eclipse_caution'] else 'Clear'}",
-        f"Sun in       : {sig['sun_sign']['sign']} ({sig['sun_sign']['sector']})",
+        f"--- TIME & WORLD ---",
+        f"Time       : {sig.get('time_of_day', 'N/A')} (UTC {sig.get('sunrise_utc','?')} rise / {sig.get('sunset_utc','?')} set)",
+        f"Session    : {', '.join(sig.get('market_session', ['?']))}",
+        f"Liquidity  : {sig.get('liquidity', 'N/A')}",
+        f"Season     : {sig.get('season', 'N/A')} — {sig.get('season_tendency', '')}",
+        f"Solar Term : {sig.get('solar_term', 'N/A')} — {sig.get('solar_term_meaning', '')}",
+        "",
+        f"--- MOON ---",
+        f"Phase      : {sig['moon_phase']} [{sig.get('moon_symbol','?')}] {sig.get('moon_illumination', 0):.1f}% illuminated",
+        f"Bias       : {sig['moon_bias']}",
+        f"Moonrise   : {sig.get('moonrise_utc', 'N/A')} UTC  |  Moonset: {sig.get('moonset_utc', 'N/A')} UTC",
+        "",
+        f"--- PLANETARY RULERS ---",
+        f"Day Ruler  : {sig.get('day_ruler','?')} — {sig.get('day_ruler_meaning','')}",
+        f"Hour Ruler : {sig.get('planetary_hour','?')} — {sig.get('planetary_hour_meaning','')}",
+        f"Retrograde : {retro_list}",
+        "",
+        f"--- COSMIC SCORES ---",
+        f"Aspect Score  : {sig['cosmic_score']}",
+        f"Temporal Score: {sig['temporal_score']}",
+        f"Combined Score: {sig['combined_score']} ({sig['cosmic_bias']})",
+        f"Mercury Retro : {'YES — CAUTION' if sig['mercury_retrograde'] else 'No'}",
+        f"Eclipse       : {'CAUTION — {:.1f} days'.format(sig['eclipse_days']) if sig['eclipse_caution'] else 'Clear'}",
+        f"Sun in        : {sig['sun_sign']['sign']} ({sig['sun_sign']['sector']})",
         "",
         f"--- CRITERIA MET: {sig['criteria_met']}/4 ---",
     ]

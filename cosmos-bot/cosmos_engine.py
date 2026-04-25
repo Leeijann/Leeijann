@@ -13,6 +13,7 @@ import math
 import datetime
 import swisseph as swe
 from config import FIBONACCI_LEVELS, PLANET_ASPECTS, GANN_ANGLES
+from time_brain import get_brain_state
 
 # Use Moshier built-in ephemeris — no files needed, runs fully offline
 swe.set_ephe_path(None)
@@ -283,7 +284,7 @@ def get_chiron_node_context(date=None) -> dict:
 # ─── FULL COSMIC REPORT ──────────────────────────────────────────────────────
 
 def full_cosmic_report(date=None) -> dict:
-    """Master function — returns a complete Swiss Ephemeris cosmic snapshot."""
+    """Master function — returns a complete cosmic + temporal snapshot."""
     aspect_score, aspects = calculate_aspect_score(date)
     moon          = get_moon_phase(date)
     retro_planets = get_retrograde_planets(date)
@@ -292,6 +293,7 @@ def full_cosmic_report(date=None) -> dict:
     sun_sign      = get_sun_sign(date)
     positions     = get_planet_positions(date)
     cn_context    = get_chiron_node_context(date)
+    brain         = get_brain_state()
 
     if aspect_score >= 15:
         cosmic_bias = "BULLISH"
@@ -300,17 +302,23 @@ def full_cosmic_report(date=None) -> dict:
     else:
         cosmic_bias = "NEUTRAL"
 
+    # Blend cosmic aspect score with temporal brain score for a unified signal
+    combined_score = aspect_score + brain["temporal_score"]
+
     return {
-        "date":                  str(datetime.datetime.utcnow()),
-        "aspect_score":          aspect_score,
-        "cosmic_bias":           cosmic_bias,
-        "active_aspects":        aspects,
-        "moon":                  moon,
-        "mercury_retrograde":    retro,
-        "retrograde_planets":    retro_planets,
+        "date":                   str(datetime.datetime.utcnow()),
+        "aspect_score":           aspect_score,
+        "temporal_score":         brain["temporal_score"],
+        "combined_score":         combined_score,
+        "cosmic_bias":            cosmic_bias,
+        "active_aspects":         aspects,
+        "moon":                   moon,
+        "mercury_retrograde":     retro,
+        "retrograde_planets":     retro_planets,
         "eclipse_proximity_days": round(eclipse_days, 1),
-        "eclipse_caution":       eclipse_days <= 7,
-        "sun_sign":              sun_sign,
-        "chiron_node":           cn_context,
-        "planet_positions":      {k: round(v, 2) for k, v in positions.items()},
+        "eclipse_caution":        eclipse_days <= 7,
+        "sun_sign":               sun_sign,
+        "chiron_node":            cn_context,
+        "planet_positions":       {k: round(v, 2) for k, v in positions.items()},
+        "brain":                  brain,
     }
