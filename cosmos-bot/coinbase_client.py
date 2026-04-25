@@ -120,6 +120,72 @@ class CoinbaseClient:
             log.error(f"market_sell error: {e}")
             return None
 
+    def limit_sell(self, product_id: str, base_size: float, limit_price: float,
+                   label: str = "LIMIT"):
+        """Place a limit sell order — used for take profit."""
+        order_id = str(uuid.uuid4())
+        try:
+            resp = self.client.limit_order_gtc_sell(
+                client_order_id=order_id,
+                product_id=product_id,
+                base_size=str(round(base_size, 8)),
+                limit_price=str(round(limit_price, 2)),
+            )
+            log.info(f"{label} SELL {product_id} size={base_size} @ ${limit_price}")
+            return resp
+        except Exception as e:
+            log.error(f"limit_sell error: {e}")
+            return None
+
+    def stop_limit_sell(self, product_id: str, base_size: float,
+                        stop_price: float, limit_price: float):
+        """Place a stop-limit sell order — used for stop loss."""
+        order_id = str(uuid.uuid4())
+        try:
+            resp = self.client.stop_limit_order_gtc_sell(
+                client_order_id=order_id,
+                product_id=product_id,
+                base_size=str(round(base_size, 8)),
+                stop_price=str(round(stop_price, 2)),
+                limit_price=str(round(limit_price * 0.998, 2)),  # 0.2% below stop
+            )
+            log.info(f"STOP-LIMIT SELL {product_id} stop=${stop_price} limit=${limit_price}")
+            return resp
+        except Exception as e:
+            log.error(f"stop_limit_sell error: {e}")
+            return None
+
+    def execute_full_trade(self, product_id: str, usd_amount: float,
+                           stop_loss: float, take_profit: float) -> dict:
+        """
+        Execute a full trade: market buy + stop loss + take profit orders.
+        Returns dict with all order results.
+        """
+        buy_result = self.market_buy(product_id, usd_amount)
+        if not buy_result:
+            return {"error": "Market buy failed"}
+
+        price_data  = self.get_price(product_id)
+        fill_price  = price_data["mid"] if price_data else usd_amount
+        base_size   = round(usd_amount / fill_price, 8)
+
+        sl_result = None
+        tp_result = None
+
+        if stop_loss:
+            sl_result = self.stop_limit_sell(product_id, base_size, stop_loss, stop_loss)
+
+        if take_profit:
+            tp_result = self.limit_sell(product_id, base_size, take_profit, "TAKE_PROFIT")
+
+        return {
+            "buy":         buy_result,
+            "stop_loss":   sl_result,
+            "take_profit": tp_result,
+            "base_size":   base_size,
+            "fill_price":  fill_price,
+        }
+
     def get_order(self, order_id: str):
         """Look up a specific order by ID."""
         try:
